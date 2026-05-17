@@ -13,6 +13,7 @@ $$CVI = \frac{Z(\text{VORP}) + Z(\text{WS})}{2} - Z(\text{Salary})$$, and graphe
 
 ### Structural Segmenting via K-Means Clustering
 ![NBA Player Clusters: Salary vs VORP](images/nba_clusters.png)
+https://github.com/kiernanm-apollo/DATA-375-NBA-Contract-Value-Index/blob/main/README.md
 
 
 
