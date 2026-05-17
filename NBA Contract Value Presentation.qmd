@@ -1,0 +1,181 @@
+---
+title: "Contract Value in the NBA"
+author: "Kiernan, Thomas, Tyler, Yash"
+format: revealjs
+theme: league
+---
+
+## Contract Value is Relevant in the Modern NBA
+
+* New CBA regulations complicate modern roster building
+* Good contracts are just as important as on-court talent
+* Our question: Which NBA players are on the most valuable contracts?
+
+![](cropped-rocketsmoney_getty_ringer.jpg){fig-align="center" width=80%}
+
+## Why is this Important?
+
+* Helps us identify trends and types of players to target/avoid
+* Increase good contracts that extend championship windows
+* Prevent poor contracts that could set franchises back
+
+* To do this, we must build an on-court impact metric and compare it with contract value
+
+## Building a Metric that Matters
+
+* Looking at points or assists doesn't tell the whole story
+* Contract Value Index - metric used to compare on court value with salary
+    * Win Shares - estimate number of wins a player contributes to their team
+    * VORP - measures a player's output compared to a replacement player
+    * Salary - total money player made in a season
+* Using both win shares and VORP, we can balance individual and team contribution
+
+## Building a Metric that Matters
+
+* Need to use Z-scores to normalize our data
+    * Allows for everything to be compared directly
+* $CVI = \frac{Z(VORP) + Z(WS)}{2} - Z(Salary)$
+* Averaging VORP and win shares balances the two
+* Subtracting salary allows us to see difference between production value and contract value
+    * Positive = valuable players, negative = non-valuable players
+
+## Clean Data is Good Data
+
+* Pulled data from Basketball Reference (performance) and ESPN (contract) - both from 2024-2025 season
+    * Basketball Reference - remove rows with duplicates and missing values, select relevant columns, standardize player names
+    * ESPN - fix header, rename and select relevant columns, remove repeated headers, clean player names and salaries
+
+## Clean Data is Good Data
+
+* Merge both datasets on player name and rename columns
+* Account for traded players by only keeping the "2TM" entry and removing others with the same player
+* Export into final CSV - 467 entries total
+
+![](PlayerTable.png){fig-align="center" width=80%}
+
+## First, Some Exploratory Efficiency Metrics
+
+* In our efficiency metrics, we found that 
+    * The WS/48 minutes mean was 0.0915
+        * For every 48 minutes played, the average player is responsible for 0.0915 units of a win
+    * The VORP/million mean was 0.0462
+        * For every million dollars, the average player provides 0.0462 points of value over a replacement
+
+## Detecting Outliers
+
+* We used a QQ plot to analyze VORP/million outliers
+* Mostly followed a normal distribution expect for the tails
+![Q-Q Plot: Identifying Elite Value](qq_plot_vorp.png){width=70% fig-align="center"}
+
+## K-Clustering
+
+* We used 4 clusters on the data which can be understood as:
+    * Superstars - High salary, VORP, and MP
+    * Value - High VORP, low salary
+    * Overpaid - High salary, low VORP
+    * Rotation - Moderate VORP and salary
+
+## K-Clustering Visual
+
+* Some outliers include Shai Gilgeous-Alexander, Nikola Jokic, and Giannis Antetokounmpo
+![NBA Player Clusters: Salary vs VORP](nba_clusters.png){width=80% fig-align="center"}
+
+## Back to CVI - Visualizing the Data
+
+* Build a scatter plot of player CVIs vs. Minutes Played
+    * Put a 500 minute threshold to ensure meaningful play time
+* Scale data and break into 3 clusters - Value Assets, Fair Value, Negative Assets
+
+![](ScatterCode.png){fig-align="center" width=80%}
+
+## Back to CVI - Visualizing the Data
+
+![](ScatterPlot.png){fig-align="center" width=80%}
+
+* Notice that Value Assets play more minutes, while Fair Values play less (create more value with more minutes)
+* Negative Assets are scattered all throughout, meaning any contract can become a bust - but how?
+
+## Our Pipeline Produces Actionable Insights
+
+![Top 10 Players - CVI](Top10.png){fig-align="center" width=80%}
+
+## Our Pipeline Produces Actionable Insights
+
+![Bottom 10 Players - CVI](Bottom10.png){fig-align="center" width=80%}
+
+## Analyzing Significant Results
+
+* Categories found from top 20
+
+* Tier 1 - Statistical anomalies (Jokic, Gilgeous-Alexander)
+    * Despite having massive contracts - their play is so good that they are still the most valuable
+
+![](JokicAlexander.jpg){fig-align="center" width=80%}
+
+## Analyzing Significant Results
+
+* Tier 2 - Rookie contracts (Sengun, Duren, Williams, Mobley, Thompson, Wagner, Kessler)
+    * Players who are significantly outperforming their standard rookie deals and are in line for big extensions
+
+![](DurenMobley.jpg){fig-align="center" width=80%}
+
+## Analyzing Significant Results
+
+* Tier 3 - Elite value contracts (Zubac, Pritchard, Allen, Kornet, Jerome, Hart, White, Reaves)
+    * Most undervalued players in the league
+    * Teams recognize their abilities early and sign them to long-term, team-friendly deals
+
+![](HartWhite.jpg){fig-align="center" width=80%}
+
+## Analyzing Significant Results
+
+* Categories found from bottom 20
+
+* Tier 1 - Unfortunate injury luck (Embiid, Ingram, Leonard, Murray, Middleton, Markannen)
+    * Almost all of them missed at least half of the season, and typically are high performers
+
+![](LeonardEmbiid.jpg){fig-align="center" width=80%}
+
+## Analyzing Significant Results
+
+* Tier 2 - Overvalued contracts (Beal, Kuzma, McCollum, Rozier, Lavine, VanVleet, Vassell, Brown, Durant, Booker)
+    * Teams either overpaid, or the player's production dipped after they signed an extension
+    * Some of these should be taken with a grain of salt
+
+![](BealKuzma.jpg){fig-align="center" width=80%}
+
+## Analyzing Significant Results
+
+* Tier 3 - Bad contracts and injuries (George, Ayton, Grant, Brown)
+    * Struggle to stay on the court and perform when they are available
+    * Teams must avoid these contracts
+
+![](AytonGeorge.jpg){fig-align="center" width=80%}
+
+## Our Results Exemplify Key Takeaways
+
+* Hitting on draft picks is critical
+* Teams need to invest early and long-term in elite skillsets from role players
+    * Elite shooting, rim protection, perimeter defense, etc.
+* Players who consistently get injured are not worth significant investment
+* Need to value a player's age and future outlook more than their past production
+    * If it isn't worth the money, likely need to seek a trade
+
+## Implementation in Today's NBA
+
+* Teams have access to the needed metrics through ESPN and Basketball Reference
+    * VORP, WS, Salary, Games Played, Age, etc.
+* When it comes time to negotiate an extension or sign a free agent, front offices can measure different salary levels to see when the price is no longer worth it
+* They can also identify traits in their own players that align with those of the most/least valuable contracts to guide their decision-making
+
+## There is Still Room to Grow
+
+* This is only based on one season's data
+    * Need a bigger sample to better understand player contracts
+* Adding other statistics to our metric could make it more accurate
+* Why are players like Jaylen Brown, Devin Booker on bad contracts?
+    * Not winning enough games? Plateaued production over time? Other?
+
+## Thank You! Any Questions?
+
+![](Giannis.jpg){fig-align="center" width=80%}

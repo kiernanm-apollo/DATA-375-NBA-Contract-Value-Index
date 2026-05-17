@@ -1,0 +1,533 @@
+---
+title: "NBA Player Value Dataset Pipeline"
+author: "Kiernan, Tyler, Thomas, Yash"
+format:
+  html: default
+  pdf: default
+fontsize: 11pt
+---
+
+# NBA Player Value Dataset Pipeline (2024-2025)
+
+Data sources:
+- Basketball Reference advanced stats
+- ESPN NBA salaries
+
+Output: `nba_player_value_2025.csv` with columns: Player, Age, Team, Pos, G, MP, OWS, DWS, WS, VORP, Salary
+
+---
+
+# Phase 1: Basketball Reference Advanced Stats
+
+## Extract and Clean
+
+```{python}
+import pandas as pd
+from unidecode import unidecode
+
+print("=" * 70)
+print("PHASE 1: Basketball Reference Advanced Stats")
+print("=" * 70)
+
+# Fetch data from Basketball Reference
+url = "https://www.basketball-reference.com/leagues/NBA_2025_advanced.html"
+tables = pd.read_html(url)
+df = tables[0]
+
+print(f"\nInitial shape: {df.shape}")
+
+# Remove duplicate header rows
+df = df[df['Player'] != 'Player']
+df = df.reset_index(drop=True)
+
+# Remove rows with missing Win Shares
+print(f"Rows with missing WS: {df['WS'].isnull().sum()}")
+df = df[df['WS'].notnull()]
+
+print(f"After cleaning: {df.shape}")
+```
+
+## Select and Transform Columns
+
+```{python}
+# Keep only needed columns
+df = df[['Player', 'Age', 'Team', 'Pos', 'G', 'MP', 'OWS', 'DWS', 'WS', 'VORP']]
+
+# Create normalized player name for matching across sources
+# Handle unicode characters (accents, special chars), convert to lowercase, remove non-alpha
+df['Player_clean'] = df['Player'].apply(lambda x: unidecode(str(x)).lower().strip())
+df['Player_clean'] = df['Player_clean'].str.replace('[^a-z ]', '', regex=True)
+
+# Remove name suffixes (Jr, III, II, Sr)
+df['Player_clean'] = df['Player_clean'].str.replace(' jr', '')
+df['Player_clean'] = df['Player_clean'].str.replace(' iii', '')
+df['Player_clean'] = df['Player_clean'].str.replace(' ii', '')
+df['Player_clean'] = df['Player_clean'].str.replace(' sr', '')
+
+print(f"\nBasketball Reference final shape: {df.shape}")
+print(f"Unique players: {df['Player'].nunique()}")
+df.head()
+```
+
+---
+
+# Phase 2: ESPN NBA Salaries (Paginated)
+
+## Extract All Pages
+
+```{python}
+print("\n" + "=" * 70)
+print("PHASE 2: ESPN NBA Salaries (13 Pages)")
+print("=" * 70)
+
+salary_pages = []
+
+for page in range(1, 14):
+    # Build URL (page 1 has no page parameter)
+    if page == 1:
+        url = "https://www.espn.com/nba/salaries/_/year/2025/seasontype/5"
+    else:
+        url = f"https://www.espn.com/nba/salaries/_/year/2025/page/{page}/seasontype/5"
+    
+    print(f"\nPage {page}...", end=" ")
+    tables = pd.read_html(url)
+    temp = tables[0].copy()
+    
+    # Fix header (first row is duplicated header in table)
+    temp.columns = temp.iloc[0]
+    temp = temp[1:].reset_index(drop=True)
+    
+    # Rename columns to standard names
+    temp = temp.rename(columns={
+        'NAME': 'Player',
+        'TEAM': 'Team',
+        'SALARY': 'Salary'
+    })
+    
+    # Keep only needed columns
+    temp = temp[['Player', 'Team', 'Salary']]
+    
+    # Remove repeated header rows that appear within pages
+    temp = temp[temp['Player'] != 'NAME'].reset_index(drop=True)
+    
+    # Clean player name
+    temp['Player'] = temp['Player'].astype(str).str.split(',').str[0]
+    temp['Player_clean'] = temp['Player'].apply(lambda x: unidecode(str(x)).lower().strip())
+    temp['Player_clean'] = temp['Player_clean'].str.replace('[^a-z ]', '', regex=True)
+    temp['Player_clean'] = temp['Player_clean'].str.replace(' jr', '')
+    temp['Player_clean'] = temp['Player_clean'].str.replace(' iii', '')
+    temp['Player_clean'] = temp['Player_clean'].str.replace(' ii', '')
+    temp['Player_clean'] = temp['Player_clean'].str.replace(' sr', '')
+    
+    # Clean salary (remove $ and commas, convert to numeric)
+    temp['Salary'] = temp['Salary'].astype(str)
+    temp['Salary'] = temp['Salary'].str.replace('[\$,]', '', regex=True)
+    temp['Salary'] = pd.to_numeric(temp['Salary'], errors='coerce')
+    
+    salary_pages.append(temp)
+    print(f"✓ ({temp.shape[0]} rows)")
+
+salary_full = pd.concat(salary_pages, ignore_index=True)
+salary_full = salary_full.reset_index(drop=True)
+
+print(f"\n\nCombined ESPN salary shape: {salary_full.shape}")
+print(f"Unique players in salary data: {salary_full['Player'].nunique()}")
+print(f"Missing salary values: {salary_full['Salary'].isnull().sum()}")
+salary_full.head()
+```
+
+---
+
+# Phase 3: Merge Performance and Salary Data
+
+```{python}
+print("\n" + "=" * 70)
+print("PHASE 3: Merge Performance and Salary Data")
+print("=" * 70)
+
+print(f"\nBefore merge:")
+print(f"  Basketball Reference: {df.shape[0]} rows, {df['Player'].nunique()} unique players")
+print(f"  ESPN Salaries: {salary_full.shape[0]} rows, {salary_full['Player'].nunique()} unique players")
+
+# Merge on normalized player name
+merged_df = pd.merge(df, salary_full, on='Player_clean', how='inner')
+
+print(f"\nAfter merge: {merged_df.shape}")
+print(f"Matched players: {merged_df['Player_clean'].nunique()}")
+
+# Rename columns (merge creates Player_x/Team_x and Player_y/Team_y from both sources)
+merged_df = merged_df.rename(columns={
+    'Player_x': 'Player',
+    'Team_x': 'Team'
+})
+merged_df = merged_df.drop(columns=['Player_y', 'Team_y'])
+
+merged_df.head()
+```
+
+---
+
+# Phase 4: Handle Traded Players (One Row per Player)
+
+```{python}
+print("\n" + "=" * 70)
+print("PHASE 4: Deduplicate - One Row per Player")
+print("=" * 70)
+
+player_counts = merged_df['Player'].value_counts()
+duplicates = player_counts[player_counts > 1]
+
+print(f"\nPlayers with multiple rows (traded mid-season): {len(duplicates)}")
+
+# For traded players appearing multiple times, prefer the 2TM row
+# 2TM = player played for 2 teams and has combined stats
+player_df = merged_df.copy()
+player_df['is_2TM'] = (player_df['Team'] == '2TM').astype(int)
+
+# Sort so 2TM rows come first (ascending=False puts 1 before 0)
+player_df = player_df.sort_values(
+    by=['Player', 'is_2TM'],
+    ascending=[True, False]
+)
+
+# Keep only first occurrence per player (2TM if available, else their team)
+player_df = player_df.drop_duplicates(subset='Player', keep='first')
+player_df = player_df.drop(columns='is_2TM')
+
+print(f"After deduplication: {player_df.shape}")
+print(f"Unique players: {player_df['Player'].nunique()}")
+```
+
+---
+
+# Phase 5: Final Validation
+
+```{python}
+print("\n" + "=" * 70)
+print("PHASE 5: Final Validation")
+print("=" * 70)
+
+# Check shape and structure
+print(f"\nFinal shape: {player_df.shape}")
+print(f"\nMissing values per column:")
+print(player_df.isnull().sum())
+
+# Verify no duplicate players remain
+print(f"\nDuplicate players: {player_df.duplicated(subset='Player').sum()}")
+
+# Remove temporary helper column and select final columns in order
+final_columns = ['Player', 'Age', 'Team', 'Pos', 'G', 'MP', 'OWS', 'DWS', 'WS', 'VORP', 'Salary']
+player_df = player_df[final_columns]
+
+print(f"\nFinal columns: {list(player_df.columns)}")
+print(f"Data types:")
+print(player_df.dtypes)
+```
+
+---
+
+# Phase 6: Export Final Dataset
+
+```{python}
+print("\n" + "=" * 70)
+print("PHASE 6: Export")
+print("=" * 70)
+
+output_file = "nba_player_value_2025.csv"
+player_df.to_csv(output_file, index=False)
+print(f"\n✓ Saved to: {output_file}")
+print(f"  Rows: {player_df.shape[0]}")
+print(f"  Columns: {player_df.shape[1]}")
+```
+
+---
+
+# Dataset Preview
+
+```{python}
+print("\nFirst 10 rows of final dataset:")
+player_df.head(10)
+```
+
+```{python}
+print("\nLast 10 rows:")
+player_df.tail(10)
+```
+
+---
+
+# Post-Export Validation
+
+```{python}
+print("\n" + "=" * 70)
+print("POST-EXPORT VALIDATION")
+print("=" * 70)
+
+# Load the exported CSV to verify integrity
+nba_data_loaded = pd.read_csv("nba_player_value_2025.csv")
+
+print(f"\nLoaded dataset shape: {nba_data_loaded.shape}")
+print(f"In-memory dataset shape: {player_df.shape}")
+print(f"Shapes match: {nba_data_loaded.shape == player_df.shape}")
+
+print(f"\nColumns in loaded file: {list(nba_data_loaded.columns)}")
+print(f"Columns match: {list(nba_data_loaded.columns) == list(player_df.columns)}")
+
+print(f"\nData integrity check:")
+print(f"  Null values in loaded file:")
+print(nba_data_loaded.isnull().sum())
+
+print(f"\n  Duplicate players: {nba_data_loaded.duplicated(subset='Player').sum()}")
+
+print(f"\nFirst 5 rows of exported file:")
+print(nba_data_loaded.head())
+
+print(f"\n✓ Export validation complete!")
+```
+
+---
+
+# How to Load This Dataset for Downstream Analysis
+
+```{python}
+print("""
+HOW TO LOAD THE FINAL DATASET (for teammates and next steps)
+==============================================================
+
+import pandas as pd
+
+# Load the clean player-level dataset
+nba_data = pd.read_csv("nba_player_value_2025.csv")
+
+# Available columns:
+# Player, Age, Team, Pos, G, MP, OWS, DWS, WS, VORP, Salary
+
+# Quick sanity checks:
+print(nba_data.shape)           # (number_of_players, 11)
+print(nba_data.info())          # Data types and null counts
+print(nba_data.describe())      # Summary statistics
+print(nba_data.head())          # First 5 rows
+
+# Example analysis:
+# Top players by Win Shares
+nba_data.nlargest(10, 'WS')[['Player', 'Team', 'WS', 'Salary']]
+
+# Top paid players
+nba_data.nlargest(10, 'Salary')[['Player', 'Team', 'Salary', 'WS']]
+""")
+```
+
+# Analysis
+## 1. Efficiency Metrics
+```{python}
+import numpy as np
+
+print("=" * 70)
+print("Phase 7: Efficiency Benchmarking")
+print("=" * 70)
+
+#WS/48 removes bias from players who play most/little of the game
+#This helps identify players who are highly productive in their specific roles
+#(Win Shares / Minutes Played) * 48
+player_df['WS_48'] = (player_df['WS'] / player_df['MP']) * 48
+
+#VORP per Million identifies who provides the most replacement value per dollar 
+#Use 1,000,000 as the denominator to keep the values easily interpretable
+player_df['VORP_per_Million'] = player_df['VORP'] / (player_df['Salary'] / 1_000_000)
+
+print(f"\nMetrics for {player_df.shape[0]} players")
+print(f"WS/48 Mean: {player_df['WS_48'].mean():.4f}")
+print(f"VORP per Million Mean: {player_df['VORP_per_Million'].mean():.4f}")
+```
+
+```{python}
+#Displaying leading players among both metrics
+qualified_players = player_df[player_df['MP'] >= 500].copy()
+
+print("\nTop 5 VORP per Million Dollars Leaders:")
+display(qualified_players.nlargest(5, 'VORP_per_Million')[['Player', 'Team', 'Salary', 'VORP', 'VORP_per_Million']])
+
+print("\nTop 5 Production WS/48 Leaders:")
+display(qualified_players.nlargest(5, 'WS_48')[['Player', 'Team', 'MP', 'WS', 'WS_48']])
+```
+
+<br>
+**WS/48** describes which players are most impactful when on the court. Since it is a rate it removes any bias when taking into consideration starters vs bench players. **VORP/million** is our initial metric that generally begins to answers our semester goal question of contract value.
+
+## 2. Outlier Detection 
+
+```{python}
+import matplotlib.pyplot as plt
+import scipy.stats as stats
+import statsmodels.api as sm
+
+print("="*70)
+print("PHASE 8: Statistical Outlier Detection & QQ Analysis")
+print("="*70)
+
+#Filter for players with meaningful playing time to reduce noise
+analysis_df = player_df[player_df['MP'] >= 500].copy()
+
+#Generate the QQ Plot for VORP/Million
+#This checks if the VORP/million follows a normal distribution
+plt.figure(figsize=(10, 6))
+stats.probplot(analysis_df['VORP_per_Million'], dist="norm", plot=plt)
+
+plt.title('Q-Q Plot: VORP per Million Dollars')
+plt.savefig('qq_plot_vorp.png', dpi=300, bbox_inches='tight')
+plt.xlabel('Theoretical Quantiles')
+plt.ylabel('Ordered Values (VORP per $1M)')
+plt.grid(True, linestyle='--', alpha=0.7)
+plt.show()
+
+#Linear Regression Salary vs VORP
+#Salary should predict VORP theoretically
+#Residuals (outliers) represent value deviations.
+X=sm.add_constant(analysis_df['Salary'])
+model=sm.OLS(analysis_df['VORP'], X).fit()
+
+#Add residuals to the dataframe
+#Positive residual means player produces more than their salary predicts, Value
+#Negative residual means player produces less than their salary predicts, Overpaid
+analysis_df['Value_Residual'] = model.resid
+
+print("\nRegression Summary:")
+print(f"R-squared: {model.rsquared:.4f}")
+
+#Identify Statistical Outliers
+std_resid = analysis_df['Value_Residual'].std()
+outliers = analysis_df[np.abs(analysis_df['Value_Residual']) > 2*std_resid]
+
+print(f"\nStatistical Outliers Detected: {len(outliers)}")
+display(outliers[['Player', 'Team', 'Salary', 'VORP', 'Value_Residual']].sort_values(by='Value_Residual', ascending=False))
+```
+
+<br>
+Calculating value_residual uses a linear model to show the expectation for a salary amount should look like. The player with the largest positive residual is the best value since they are the largest above expectation. 
+The QQ plot will show these high value outliers as well as overpaid players. This can be useful information for determining what future contract value should be for that player. If the dots follow the red line, the value is normally distributed, otherwise the player is an outlier.
+
+## 3. K Clustering
+
+```{python}
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
+import seaborn as sns
+print("=" * 70)
+print("PHASE 9: K-Means Clustering")
+print("=" * 70)
+
+#Use the analysis_df from the previous step (players with > 500 MP)
+cluster_features=['MP','VORP','Salary']
+data_to_cluster=analysis_df[cluster_features]
+
+#Scale Mean=0, StdDev=1
+scaler=StandardScaler()
+scaled_data=scaler.fit_transform(data_to_cluster)
+
+#K=4 to represent Stars, Busts, Values, and Role Players
+kmeans=KMeans(n_clusters=4, random_state=42, n_init=10)
+analysis_df['Cluster']=kmeans.fit_predict(scaled_data)
+
+#Profile the Clusters
+cluster_summary=analysis_df.groupby('Cluster')[cluster_features].mean().reset_index()
+print("\nClusters (Average values per group):")
+print(cluster_summary)
+
+#Visualize the Clusters
+plt.figure(figsize=(12, 8))
+sns.scatterplot(data=analysis_df, x='Salary', y='VORP', hue='Cluster', size='MP', palette='viridis',alpha=0.7)
+
+plt.title('NBA Player Clusters Salary, VORP, Size=Minutes Played')
+plt.xlabel('Salary')
+plt.ylabel('VORP')
+plt.legend(title='Cluster ID', bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.grid(True, alpha=0.3)
+plt.savefig('nba_clusters.png', dpi=300, bbox_inches='tight')
+plt.show()
+```
+
+<br>
+We have to scale the data since the K mean is distance based. The salaries are in units of millions and **VORP** is not, so it would overlook **VORP** entirely. **Cluster_summary** prints the average player for each cluster. Cluster 2 are the superstars who have high **Salary**, **VORP**, and **MP**. Cluster 3 are players who are large value with high **VORP** and lower **Salary**. Cluster 1 is the overpaid players, with a high **Salary** and lower **VORP**. Finally Cluster 1 are the rotation players with moderate **VORP** and **Salary**.
+
+## 4. Contract Value Index (CVI)
+
+```{python}
+import pandas as pd
+import numpy as np
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+print("="*70)
+print("PHASE 10: Unified Contract Value Index & CVI Clustering")
+print("="*70)
+
+#Calculate the CVI
+#Use Z-scores to normalize VORP/WS and Salary
+def z_score(series):
+    return (series-series.mean()) / series.std()
+
+#Combine production metrics into a single score
+z_vorp=z_score(analysis_df['VORP'])
+z_ws=z_score(analysis_df['WS'])
+impact_score = (z_vorp+z_ws)/2
+
+# Subtract the normalized salary
+# Positive =Output > Cost 
+# Negative =Cost > Output 
+analysis_df['CVI']=impact_score-z_score(analysis_df['Salary'])
+
+#Cluster based on the new CVI+Minutes
+# This groups players by "Value Identity"
+cvi_features = ['CVI', 'MP']
+scaler_cvi = StandardScaler()
+scaled_cvi = scaler_cvi.fit_transform(analysis_df[cvi_features])
+
+#Use 3 clusters: Value Assets, Fair Value, and Negative Assets
+kmeans_cvi=KMeans(n_clusters=3, random_state=42, n_init=10)
+analysis_df['Value_Tier'] = kmeans_cvi.fit_predict(scaled_cvi)
+
+#Visualization
+plt.figure(figsize=(10, 6))
+sns.scatterplot(data=analysis_df, x='MP', y='CVI', hue='Value_Tier', palette='coolwarm',s=100,alpha=0.8)
+
+plt.axhline(0, color='black', linestyle='--', alpha=0.5)
+plt.title('NBA Contract Value Index (CVI) vs. Minutes Played')
+plt.xlabel('Minutes Played (MP)')
+plt.ylabel('Contract Value Index (CVI)')
+plt.legend(title='Value Tier')
+plt.grid(True, alpha=0.3)
+plt.savefig('cvi_leaders.png', dpi=300, bbox_inches='tight')
+plt.show()
+
+#Final Ranking
+print("\nTop 5 Players by Unified Contract Value Index (CVI):")
+display(analysis_df.nlargest(5, 'CVI')[['Player','Team','Salary', 'VORP','WS', 'CVI']])
+```
+
+<br>
+$CVI = \frac{Z(VORP) + Z(WS)}{2} - Z(Salary)$
+
+**CVI** averages **VORP** and **WS** after normalization, and by subtracting that value from their normalized **Salary** we can gauge how valuable a player is.
+
+Players with a **CVI** >1 are key components who provide value way above their pay. The average is players with a **CVI** around 0. However players with **CVI** <-1 are considered financial liabilities as they cost way more than their performance. I clustered **MP** against **CVI** to distinguish between players who are consistent superstars and players who inconsistent but can be good.
+
+```{python}
+# 1. Top 20 Players (High Value / Over-performers)
+print("\n" + "="*30)
+print("TOP 20: HIGH VALUE ASSETS (CVI)")
+print("="*30)
+top_20 = analysis_df.nlargest(20, 'CVI')[['Player', 'Team', 'Salary', 'VORP', 'WS', 'CVI']]
+display(top_20)
+```
+
+```{python}
+# 2. Bottom 20 Players (Low Value / Under-performers)
+print("\n" + "="*30)
+print("BOTTOM 20: NEGATIVE ASSETS (CVI)")
+print("="*30)
+bottom_20 = analysis_df.nsmallest(20, 'CVI')[['Player', 'Team', 'Salary', 'VORP', 'WS', 'CVI']]
+display(bottom_20)
+```
